@@ -1,0 +1,27 @@
+{
+  "input_files": [
+    "Phương án 9.1_ UCTT MĐDR-x.docx",
+    "Phương án 9.5_ UCTT trạm ngập lụt, chia cắt-x.docx",
+    "PL9.1.1_Phương án ƯCTT mất điện diện rộng doi voi tram uu tien.docx",
+    "PL9.1.2_Phương án ƯCTT mất điện diện rộng tai thu phu tinh.docx",
+    "PL9.1.3_Phương án ƯCTT mất điện diện rộng trạm ngập lụt.docx",
+    "PL9.1.4_Phương án ƯCTT mất điện diện rộng trạm chia cắt.docx",
+    "PL9.1.5_Phương án ƯCTT mất điện diện rộng các trạm còn lại.docx"
+  ],
+  "rule_files": [
+    "rule 1.xlsx",
+    "rule_csdl.xlsx",
+    "rule_phuongan.xlsx"
+  ],
+  "result": {
+    "summary": {
+      "overall_score": 100,
+      "overall_result": "DAT",
+      "key_findings": [
+        "Rule engine phát hiện 0 vấn đề cần xử lý."
+      ]
+    },
+    "checks": [],
+    "report_markdown": "# Báo cáo thẩm định PCTT/UCTT trạm BTS\n\n## 1. Kết luận tổng hợp\n\n- Điểm tổng: **100**\n- Kết luận: **DAT**\n\n## 2. Chi tiết phát hiện\n\nKhông có phát hiện chi tiết.\n## 3. Hướng xử lý ưu tiên\n\n1. Xử lý ngay các lỗi CRITICAL/HIGH trước khi phê duyệt phương án.\n2. Cập nhật phụ lục nhân sự ém quân, SĐT, vị trí, thời gian tiếp cận và danh sách MPĐ.\n3. Rà soát lại CSDL trạm có nguy cơ ngập/chia cắt và trạm TGX ắc quy thấp."
+  }
+}
