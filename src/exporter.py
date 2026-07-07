@@ -57,6 +57,12 @@ def _abnormal_df(result: dict) -> pd.DataFrame:
     bad_values = {"KHONG_DAT", "CAN_BO_SUNG", "KHONG_DU_DU_LIEU"}
     return checks[checks["result"].astype(str).isin(bad_values)].copy()
 
+def _feasibility_df(result: dict) -> pd.DataFrame:
+    checks = _checks_df(result)
+    if checks.empty:
+        return checks
+    return checks[checks["rule_group"].astype(str) == "Tính khả thi phương án"].copy()
+
 def export_report(result: dict, out_dir: str, base_name: str = "bao_cao_tham_dinh") -> dict[str, str]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -109,9 +115,11 @@ def _export_xlsx(result: dict, path: Path):
     summary = pd.DataFrame([result.get("summary", {})])
     rule_df = _rule_assessment_df(result)
     abnormal = _abnormal_df(result)
+    feasibility = _feasibility_df(result)
     checks = _checks_df(result)
     with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
         _write_df(writer, summary, "Tong hop")
+        _write_df(writer, feasibility, "Tinh kha thi")
         _write_df(writer, rule_df, "Danh gia tung muc")
         _write_df(writer, abnormal, "Diem bat thuong")
         _write_df(writer, checks, "Chi tiet tat ca rule")
@@ -141,7 +149,23 @@ def _export_docx(result: dict, path: Path):
         row.cells[0].text = str(k)
         row.cells[1].text = str(v)
 
-    doc.add_heading("2. Đánh giá theo từng mục rule", level=1)
+    doc.add_heading("2. Đánh giá tính khả thi phương án", level=1)
+    feasibility = _feasibility_df(result)
+    if not feasibility.empty:
+        cols = ["rule_name", "result", "severity", "evidence", "gap", "recommendation"]
+        t = doc.add_table(rows=1, cols=len(cols))
+        t.style = "Table Grid"
+        headers = ["Mục đánh giá", "KQ", "Mức", "Bằng chứng", "Khoảng thiếu/rủi ro", "Khuyến nghị"]
+        for i, c in enumerate(headers):
+            t.rows[0].cells[i].text = c
+        for _, r in feasibility.iterrows():
+            cells = t.add_row().cells
+            for i, c in enumerate(cols):
+                cells[i].text = str(r.get(c, ""))
+    else:
+        doc.add_paragraph("Chưa có dữ liệu thẩm định tính khả thi. Cần upload file phương án dạng DOCX/PDF/MD/TXT.")
+
+    doc.add_heading("3. Đánh giá theo từng mục rule", level=1)
     rule_df = _rule_assessment_df(result)
     if not rule_df.empty:
         cols = ["rule_group", "rule_name", "status", "so_bat_thuong", "o_du_lieu_lien_quan", "khuyen_nghi"]
@@ -157,7 +181,7 @@ def _export_docx(result: dict, path: Path):
     else:
         doc.add_paragraph("Không có dữ liệu đánh giá theo rule.")
 
-    doc.add_heading("3. Điểm bất thường và vị trí ô dữ liệu", level=1)
+    doc.add_heading("4. Điểm bất thường và vị trí ô dữ liệu", level=1)
     abnormal = _abnormal_df(result)
     if not abnormal.empty:
         cols = ["rule_name", "result", "severity", "source_file", "source_sheet", "source_cell", "source_value", "gap", "recommendation"]
@@ -175,7 +199,7 @@ def _export_docx(result: dict, path: Path):
     else:
         doc.add_paragraph("Không phát hiện điểm bất thường.")
 
-    doc.add_heading("4. Hướng xử lý ưu tiên", level=1)
+    doc.add_heading("5. Hướng xử lý ưu tiên", level=1)
     for text in ["Xử lý lỗi CRITICAL/HIGH trước khi phê duyệt.", "Mở file Excel báo cáo, lọc sheet 'Diem bat thuong' theo cột source_cell để sửa đúng ô dữ liệu.", "Sau khi sửa dữ liệu, chạy lại thẩm định để xác nhận trạng thái ĐẠT/KHÔNG ĐẠT theo từng rule."]:
         doc.add_paragraph(text, style="List Number")
     doc.save(path)

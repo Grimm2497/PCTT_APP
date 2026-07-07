@@ -42,6 +42,7 @@ PROVIDER_LABELS = dict(PROVIDER_OPTIONS)
 
 RULE_APPEND = "Bo sung rule mac dinh"
 RULE_REPLACE = "Chi dung rule upload"
+FEASIBILITY_GROUP = "Tính khả thi phương án"
 
 
 load_dotenv()
@@ -236,6 +237,45 @@ def _checks_frame(result: dict) -> pd.DataFrame:
     cols = [col for col in preferred if col in df.columns]
     cols.extend([col for col in df.columns if col not in cols])
     return df[cols]
+
+
+def _feasibility_frame(result: dict) -> pd.DataFrame:
+    df = _checks_frame(result)
+    if df.empty or "rule_group" not in df.columns:
+        return pd.DataFrame()
+    return df[df["rule_group"].astype(str) == FEASIBILITY_GROUP].copy()
+
+
+def _render_feasibility(result: dict) -> None:
+    df = _feasibility_frame(result)
+    if df.empty:
+        st.warning(
+            "Chua co du lieu thẩm định tính khả thi. Hay upload file phương án dạng DOCX/PDF/MD/TXT "
+            "cùng với phụ lục CSDL, sau đó chạy thẩm định lại."
+        )
+        return
+
+    rule_names = df["rule_name"].astype(str) if "rule_name" in df.columns else pd.Series("", index=df.index)
+    conclusion_mask = rule_names.str.contains("Kết luận sơ bộ", case=False, na=False)
+    conclusion = df[conclusion_mask]
+    if not conclusion.empty:
+        row = conclusion.iloc[0]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Ket luan kha thi", _result_label(row.get("result", "N/A")))
+        c2.metric("Muc do", row.get("severity", "N/A"))
+        c3.metric("So muc can xem", len(df))
+        if row.get("evidence"):
+            st.info(str(row.get("evidence")))
+        if row.get("gap"):
+            st.warning(str(row.get("gap")))
+        if row.get("recommendation"):
+            st.success(str(row.get("recommendation")))
+
+    issue_df = df[~conclusion_mask]
+    if issue_df.empty:
+        st.success("Không phát hiện thiếu sót rõ ràng trong các nhóm căn cứ khả thi tối thiểu.")
+    else:
+        st.dataframe(issue_df, use_container_width=True, hide_index=True)
 
 
 def _run_review(
@@ -621,12 +661,17 @@ def main() -> None:
     metric_cols[2].metric("So phat hien", len(checks))
     metric_cols[3].metric("Thoi gian", f"{last_run.get('elapsed', 0)}s")
 
+    st.subheader("Tham dinh tinh kha thi")
+    _render_feasibility(result)
+
     st.subheader("Download ket qua tham dinh")
     _render_downloads(last_run.get("exports", {}), key_prefix="quick_downloads")
 
-    report_tab, table_tab, json_tab, download_tab, history_tab = st.tabs(
-        ["Bao cao", "Bang chi tiet", "JSON", "Tai bao cao", "Lich su"]
+    feasibility_tab, report_tab, table_tab, json_tab, download_tab, history_tab = st.tabs(
+        ["Tinh kha thi", "Bao cao", "Bang chi tiet", "JSON", "Tai bao cao", "Lich su"]
     )
+    with feasibility_tab:
+        _render_feasibility(result)
     with report_tab:
         st.markdown(result.get("report_markdown", ""))
     with table_tab:

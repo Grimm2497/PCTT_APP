@@ -263,8 +263,30 @@ def build_markdown_report(result: dict) -> str:
     lines.append(f"- Kết luận: **{summary.get('overall_result','N/A')}**")
     for f in summary.get("key_findings", []) or []:
         lines.append(f"- {f}")
-    lines += ["", "## 2. Chi tiết phát hiện", ""]
     checks = result.get("checks", [])
+    feasibility_checks = [c for c in checks if c.get("rule_group") == "Tính khả thi phương án"]
+    lines += ["", "## 2. Đánh giá tính khả thi phương án", ""]
+    if not feasibility_checks:
+        lines.append("Chưa có dữ liệu thẩm định tính khả thi. Cần upload file phương án dạng DOCX/PDF/MD/TXT để rule engine phương án kiểm tra.")
+    else:
+        conclusion = next((c for c in feasibility_checks if "Kết luận sơ bộ" in str(c.get("rule_name", ""))), None)
+        if conclusion:
+            lines.append(f"- Kết luận sơ bộ: **{conclusion.get('result','')}**")
+            lines.append(f"- Mức độ: **{conclusion.get('severity','')}**")
+            lines.append(f"- Bằng chứng: {conclusion.get('evidence','')}")
+            if conclusion.get("gap"):
+                lines.append(f"- Khoảng thiếu/rủi ro: {conclusion.get('gap','')}")
+            if conclusion.get("recommendation"):
+                lines.append(f"- Khuyến nghị: {conclusion.get('recommendation','')}")
+        missing = [c for c in feasibility_checks if c is not conclusion and c.get("result") in {"KHONG_DAT", "CAN_BO_SUNG", "KHONG_DU_DU_LIEU"}]
+        if missing:
+            lines += ["", "Các nội dung cần bổ sung:"]
+            for c in missing:
+                lines.append(f"- **{c.get('rule_name','')}**: {c.get('gap','')} Khuyến nghị: {c.get('recommendation','')}")
+        elif conclusion:
+            lines.append("- Không phát hiện thiếu sót rõ ràng trong các nhóm căn cứ khả thi tối thiểu.")
+
+    lines += ["", "## 3. Chi tiết phát hiện", ""]
     if not checks:
         lines.append("Không có phát hiện chi tiết.")
     for i, c in enumerate(checks, 1):
@@ -282,5 +304,5 @@ def build_markdown_report(result: dict) -> str:
         lines.append(f"- Khoảng thiếu/rủi ro: {c.get('gap','')}")
         lines.append(f"- Khuyến nghị: {c.get('recommendation','')}")
         lines.append("")
-    lines += ["## 3. Hướng xử lý ưu tiên", "", "1. Xử lý ngay các lỗi CRITICAL/HIGH trước khi phê duyệt phương án.", "2. Cập nhật phụ lục nhân sự ém quân, SĐT, vị trí, thời gian tiếp cận và danh sách MPĐ.", "3. Rà soát lại CSDL trạm có nguy cơ ngập/chia cắt và trạm TGX ắc quy thấp."]
+    lines += ["## 4. Hướng xử lý ưu tiên", "", "1. Xử lý ngay các lỗi CRITICAL/HIGH trước khi phê duyệt phương án.", "2. Cập nhật phụ lục nhân sự ém quân, SĐT, vị trí, thời gian tiếp cận và danh sách MPĐ.", "3. Rà soát lại CSDL trạm có nguy cơ ngập/chia cắt và trạm TGX ắc quy thấp."]
     return "\n".join(lines)
