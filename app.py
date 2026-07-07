@@ -4,6 +4,8 @@ import json
 import os
 import tempfile
 import time
+import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
@@ -81,6 +83,51 @@ def _default_base_url(provider: str) -> str:
     return os.getenv("AI_BASE_URL", "").strip() or str(
         PROVIDER_PRESETS.get(provider, {}).get("base_url") or ""
     )
+
+
+def _provider_key_env(provider: str) -> str:
+    return PROVIDER_PRESETS.get(provider, {}).get("api_key_env", "AI_API_KEY")
+
+
+def _missing_ai_config_message(provider: str) -> str:
+    label = PROVIDER_LABELS.get(provider, provider)
+    key_env = _provider_key_env(provider)
+    return (
+        f"{label}: chua co API key. Nhap API key trong sidebar hoac khai bao "
+        f"{key_env} trong Secrets/.env. Bao cao da duoc tao bang rule engine local."
+    )
+
+
+def _friendly_ai_error(provider: str, error: Exception) -> str:
+    label = PROVIDER_LABELS.get(provider, provider)
+    raw = str(error)
+    if "403" in raw or "Forbidden" in raw:
+        if provider == "gemini":
+            return (
+                f"{label}: bi tu choi 403. Kiem tra GEMINI_API_KEY, dam bao API key "
+                "duoc phep dung Generative Language API, khong bi han che sai domain/IP, "
+                "va model dang chon duoc tai khoan cap quyen."
+            )
+        if provider == "openrouter":
+            return (
+                f"{label}: bi tu choi 403. Kiem tra OPENROUTER_API_KEY, quota/tai khoan, "
+                "quyen truy cap model va cau hinh Site URL neu tai khoan yeu cau."
+            )
+        if provider == "groq":
+            return (
+                f"{label}: bi tu choi 403. Kiem tra GROQ_API_KEY, quota va model dang chon."
+            )
+        if provider == "openai":
+            return (
+                f"{label}: bi tu choi 403. Kiem tra OPENAI_API_KEY, project/quota va "
+                "quyen truy cap model dang chon."
+            )
+        return f"{label}: bi tu choi 403. Kiem tra API key, base URL, quota va quyen model."
+    if "401" in raw or "Unauthorized" in raw:
+        return f"{label}: API key khong hop le hoac het hieu luc."
+    if "429" in raw or "rate" in raw.lower() or "quota" in raw.lower():
+        return f"{label}: vuot quota/rate limit. Thu lai sau hoac chon model/provider khac."
+    return f"{label}: {raw}"
 
 
 def _default_rules() -> list[str]:
@@ -248,8 +295,10 @@ def _run_review(
                     model=model,
                     provider=provider,
                 )
+                if ai_result is None:
+                    ai_error = _missing_ai_config_message(provider)
             except Exception as exc:
-                ai_error = str(exc)
+                ai_error = _friendly_ai_error(provider, exc)
         else:
             progress.progress(65, text="Offline mode: bo qua AI va Markdown preview...")
 
@@ -286,29 +335,81 @@ def _preview_rule_catalog(uploaded_rules, use_default_rules: bool, rule_mode: st
         return parse_rule_catalog(rule_paths)
 
 
-def _render_downloads(exports: dict[str, str]) -> None:
+def _export_mime(kind: str) -> str:
+    return {
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "markdown": "text/markdown",
+        "json": "application/json",
+    }.get(kind, "application/octet-stream")
+
+
+def _existing_exports(exports: dict[str, str]) -> list[tuple[str, Path]]:
+    files: list[tuple[str, Path]] = []
+    for kind, path in exports.items():
+        file_path = Path(path)
+        if file_path.exists():
+            files.append((kind, file_path))
+    return files
+
+
+def _exports_zip_bytes(exports: dict[str, str]) -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for _, file_path in _existing_exports(exports):
+            archive.write(file_path, arcname=file_path.name)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def _zip_file_name(exports: dict[str, str]) -> str:
+    files = _existing_exports(exports)
+    if not files:
+        return "ket_qua_tham_dinh.zip"
+    return files[0][1].with_suffix(".zip").name
+
+
+def _render_downloads(exports: dict[str, str], key_prefix: str = "downloads") -> None:
     if not exports:
         st.info("Chua co file bao cao. Hay chay tham dinh truoc.")
         return
 
+    files = _existing_exports(exports)
+    if not files:
+        st.warning("Khong tim thay file ket qua da xuat. Hay chay tham dinh lai.")
+        return
+
     labels = {
-        "docx": "Word DOCX",
-        "xlsx": "Excel XLSX",
+        "docx": "Bao cao Word",
+        "xlsx": "Bang Excel",
         "markdown": "Markdown",
         "json": "JSON",
     }
+
+    zip_col, note_col = st.columns([1, 2])
+    with zip_col:
+        st.download_button(
+            "Tai tat ca ket qua (.zip)",
+            data=_exports_zip_bytes(exports),
+            file_name=_zip_file_name(exports),
+            mime="application/zip",
+            type="primary",
+            use_container_width=True,
+            key=f"{key_prefix}_zip",
+        )
+    with note_col:
+        st.caption("File ZIP gom day du bao cao Word, bang Excel, Markdown va JSON cua phien tham dinh vua chay.")
+
     columns = st.columns(4)
-    for idx, (kind, path) in enumerate(exports.items()):
-        file_path = Path(path)
-        if not file_path.exists():
-            continue
+    for idx, (kind, file_path) in enumerate(files):
         with columns[idx % 4]:
             st.download_button(
                 labels.get(kind, kind.upper()),
                 data=file_path.read_bytes(),
                 file_name=file_path.name,
-                mime="application/octet-stream",
+                mime=_export_mime(kind),
                 use_container_width=True,
+                key=f"{key_prefix}_{kind}",
             )
 
 
@@ -510,7 +611,7 @@ def main() -> None:
 
     if last_run.get("ai_error"):
         st.warning(
-            "AI provider bi loi nen bao cao da duoc tao bang rule engine local: "
+            "AI provider chua chay duoc nen bao cao da duoc tao bang rule engine local. "
             + last_run["ai_error"]
         )
 
@@ -519,6 +620,9 @@ def main() -> None:
     metric_cols[1].metric("Ket luan", _result_label(summary.get("overall_result", "N/A")))
     metric_cols[2].metric("So phat hien", len(checks))
     metric_cols[3].metric("Thoi gian", f"{last_run.get('elapsed', 0)}s")
+
+    st.subheader("Download ket qua tham dinh")
+    _render_downloads(last_run.get("exports", {}), key_prefix="quick_downloads")
 
     report_tab, table_tab, json_tab, download_tab, history_tab = st.tabs(
         ["Bao cao", "Bang chi tiet", "JSON", "Tai bao cao", "Lich su"]
@@ -534,7 +638,7 @@ def main() -> None:
     with json_tab:
         st.code(json.dumps(result, ensure_ascii=False, indent=2), language="json")
     with download_tab:
-        _render_downloads(last_run.get("exports", {}))
+        _render_downloads(last_run.get("exports", {}), key_prefix="tab_downloads")
         st.caption(f"Da luu phien: {last_run.get('session', '')}")
     with history_tab:
         _render_history()
