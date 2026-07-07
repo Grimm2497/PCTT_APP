@@ -43,6 +43,8 @@ PROVIDER_LABELS = dict(PROVIDER_OPTIONS)
 RULE_APPEND = "Bo sung rule mac dinh"
 RULE_REPLACE = "Chi dung rule upload"
 FEASIBILITY_GROUP = "Tính khả thi phương án"
+RULE_IMPORT_GROUP = "Đối chiếu rule import"
+FEASIBILITY_GROUPS = {FEASIBILITY_GROUP, RULE_IMPORT_GROUP}
 
 
 load_dotenv()
@@ -243,7 +245,7 @@ def _feasibility_frame(result: dict) -> pd.DataFrame:
     df = _checks_frame(result)
     if df.empty or "rule_group" not in df.columns:
         return pd.DataFrame()
-    return df[df["rule_group"].astype(str) == FEASIBILITY_GROUP].copy()
+    return df[df["rule_group"].astype(str).isin(FEASIBILITY_GROUPS)].copy()
 
 
 def _render_feasibility(result: dict) -> None:
@@ -256,7 +258,7 @@ def _render_feasibility(result: dict) -> None:
         return
 
     rule_names = df["rule_name"].astype(str) if "rule_name" in df.columns else pd.Series("", index=df.index)
-    conclusion_mask = rule_names.str.contains("Kết luận sơ bộ", case=False, na=False)
+    conclusion_mask = rule_names.str.contains("Kết luận", case=False, na=False)
     conclusion = df[conclusion_mask]
     if not conclusion.empty:
         row = conclusion.iloc[0]
@@ -270,6 +272,8 @@ def _render_feasibility(result: dict) -> None:
             st.warning(str(row.get("gap")))
         if row.get("recommendation"):
             st.success(str(row.get("recommendation")))
+        if len(conclusion) > 1:
+            st.dataframe(conclusion, use_container_width=True, hide_index=True)
 
     issue_df = df[~conclusion_mask]
     if issue_df.empty:
@@ -304,8 +308,8 @@ def _run_review(
             raise ValueError("Can chon rule mac dinh hoac upload it nhat 1 file rule.")
 
         progress = st.progress(5, text="Dang doc file dau vao...")
-        progress.progress(20, text="Dang chay rule engine...")
-        deterministic_result = analyze_structured_files(input_paths)
+        progress.progress(20, text="Dang quet rule import va chay rule engine...")
+        deterministic_result = analyze_structured_files(input_paths, rule_paths=rule_paths)
 
         ai_result = None
         ai_error = ""

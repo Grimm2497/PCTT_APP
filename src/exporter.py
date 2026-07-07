@@ -61,7 +61,8 @@ def _feasibility_df(result: dict) -> pd.DataFrame:
     checks = _checks_df(result)
     if checks.empty:
         return checks
-    return checks[checks["rule_group"].astype(str) == "Tính khả thi phương án"].copy()
+    groups = {"Tính khả thi phương án", "Đối chiếu rule import"}
+    return checks[checks["rule_group"].astype(str).isin(groups)].copy()
 
 def export_report(result: dict, out_dir: str, base_name: str = "bao_cao_tham_dinh") -> dict[str, str]:
     out = Path(out_dir)

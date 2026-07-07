@@ -264,12 +264,13 @@ def build_markdown_report(result: dict) -> str:
     for f in summary.get("key_findings", []) or []:
         lines.append(f"- {f}")
     checks = result.get("checks", [])
-    feasibility_checks = [c for c in checks if c.get("rule_group") == "Tính khả thi phương án"]
+    feasibility_groups = {"Tính khả thi phương án", "Đối chiếu rule import"}
+    feasibility_checks = [c for c in checks if c.get("rule_group") in feasibility_groups]
     lines += ["", "## 2. Đánh giá tính khả thi phương án", ""]
     if not feasibility_checks:
         lines.append("Chưa có dữ liệu thẩm định tính khả thi. Cần upload file phương án dạng DOCX/PDF/MD/TXT để rule engine phương án kiểm tra.")
     else:
-        conclusion = next((c for c in feasibility_checks if "Kết luận sơ bộ" in str(c.get("rule_name", ""))), None)
+        conclusion = next((c for c in feasibility_checks if "Kết luận" in str(c.get("rule_name", ""))), None)
         if conclusion:
             lines.append(f"- Kết luận sơ bộ: **{conclusion.get('result','')}**")
             lines.append(f"- Mức độ: **{conclusion.get('severity','')}**")
@@ -278,7 +279,12 @@ def build_markdown_report(result: dict) -> str:
                 lines.append(f"- Khoảng thiếu/rủi ro: {conclusion.get('gap','')}")
             if conclusion.get("recommendation"):
                 lines.append(f"- Khuyến nghị: {conclusion.get('recommendation','')}")
-        missing = [c for c in feasibility_checks if c is not conclusion and c.get("result") in {"KHONG_DAT", "CAN_BO_SUNG", "KHONG_DU_DU_LIEU"}]
+        missing = [
+            c
+            for c in feasibility_checks
+            if "Kết luận" not in str(c.get("rule_name", ""))
+            and c.get("result") in {"KHONG_DAT", "CAN_BO_SUNG", "KHONG_DU_DU_LIEU"}
+        ]
         if missing:
             lines += ["", "Các nội dung cần bổ sung:"]
             for c in missing:
@@ -292,6 +298,8 @@ def build_markdown_report(result: dict) -> str:
     for i, c in enumerate(checks, 1):
         lines.append(f"### {i}. {c.get('rule_name','')}")
         lines.append(f"- Nhóm rule: {c.get('rule_group','')}")
+        if c.get("rule_source"):
+            lines.append(f"- Nguồn rule: {c.get('rule_source','')}")
         lines.append(f"- Kết quả: **{c.get('result','')}** | Mức độ: **{c.get('severity','')}**")
         src = "/".join([str(c.get('source_file','')), str(c.get('source_sheet','')), str(c.get('source_row',''))]).strip("/")
         if src:

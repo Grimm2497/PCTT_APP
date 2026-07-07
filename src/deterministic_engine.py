@@ -6,6 +6,7 @@ import unicodedata
 import pandas as pd
 from rapidfuzz import process, fuzz
 from .file_reader import file_to_markdown
+from .rule_loader import extract_rule_requirements
 from .utils import normalize_text, truthy, to_float
 
 @dataclass
@@ -40,6 +41,16 @@ CANONICAL_ALIASES = {
 }
 
 PLAN_SUFFIXES = {".docx", ".pdf", ".md", ".txt"}
+FEASIBILITY_GROUP = "Tính khả thi phương án"
+RULE_IMPORT_GROUP = "Đối chiếu rule import"
+MAX_PLAN_TEXT_CHARS = 300000
+
+RULE_STOPWORDS = {
+    "cac", "cach", "can", "cho", "co", "cong", "cua", "duoc", "dung", "doi",
+    "hoac", "khi", "khong", "la", "lam", "muc", "nay", "neu", "noi", "phai",
+    "phan", "quy", "sau", "the", "theo", "thi", "thuc", "trong", "tren", "tu",
+    "voi", "yeu", "dinh", "phuong", "an", "noi dung", "kiem", "tra",
+}
 
 FEASIBILITY_RULES = [
     {
@@ -120,6 +131,140 @@ def _snippet(text: str, alias: str, radius: int = 90) -> str:
     end = min(len(text), index + len(alias) + radius)
     return normalize_text(text[start:end])
 
+def _rule_keywords(rule_text: str, limit: int = 12) -> list[str]:
+    folded = _fold_text(rule_text)
+    raw_tokens = re.findall(r"[a-z0-9]{3,}", folded)
+    keywords: list[str] = []
+    for token in raw_tokens:
+        if token in RULE_STOPWORDS or token.isdigit():
+            continue
+        if token not in keywords:
+            keywords.append(token)
+        if len(keywords) >= limit:
+            break
+    return keywords
+
+def _rule_display_name(rule: dict) -> str:
+    for key in ["rule_name", "definition", "rule_text"]:
+        value = normalize_text(rule.get(key, ""))
+        if value:
+            return value[:180]
+    return "Mục rule import"
+
+def _rule_source_label(rule: dict) -> str:
+    parts = [str(rule.get("file", ""))]
+    if rule.get("sheet"):
+        parts.append(str(rule.get("sheet", "")))
+    if rule.get("row_no"):
+        parts.append(f"dòng {rule.get('row_no')}")
+    return " / ".join(x for x in parts if x)
+
+def _check_imported_rules_against_plan(fname: str, text: str, rule_requirements: list[dict]) -> list[CheckItem]:
+    if not rule_requirements:
+        return [_make_check(
+            RULE_IMPORT_GROUP,
+            "Quét nội dung file rule import",
+            "KHONG_DU_DU_LIEU",
+            "MEDIUM",
+            f"{fname}: chưa có mục rule import/default để đối chiếu",
+            "Chưa có dữ liệu rule để đối chiếu chi tiết với phương án.",
+            "Giữ tùy chọn dùng rule mặc định hoặc upload file rule trước khi chạy thẩm định.",
+            fname,
+            "",
+            abnormal_type="Thiếu rule đối chiếu",
+            rule_source="Rule import",
+        )]
+
+    folded_plan = _fold_text(text)
+    out: list[CheckItem] = []
+    dat_count = partial_count = missing_count = skipped_count = 0
+
+    for idx, rule in enumerate(rule_requirements, 1):
+        rule_text = normalize_text(rule.get("rule_text") or rule.get("definition") or rule.get("rule_name") or "")
+        keywords = _rule_keywords(rule_text)
+        if not rule_text or not keywords:
+            skipped_count += 1
+            continue
+
+        matched_terms = [kw for kw in keywords if kw in folded_plan]
+        coverage = len(matched_terms) / max(1, len(keywords))
+        fuzzy_score = 0
+        if 0 < len(matched_terms) < 3:
+            fuzzy_score = fuzz.partial_ratio(_fold_text(rule_text)[:500], folded_plan)
+
+        if len(matched_terms) >= 3 or coverage >= 0.35 or fuzzy_score >= 75:
+            result, severity = "DAT", "LOW"
+            gap = ""
+            recommendation = "Đã thấy căn cứ liên quan trong phương án; tiếp tục đối chiếu thủ công nếu rule yêu cầu số liệu chính xác."
+            dat_count += 1
+        elif matched_terms:
+            result, severity = "CAN_BO_SUNG", "MEDIUM"
+            gap = "Phương án có nhắc một phần nội dung rule nhưng chưa đủ căn cứ rõ ràng để kết luận đáp ứng."
+            recommendation = "Bổ sung đầy đủ bằng chứng/số liệu theo đúng mục rule import."
+            partial_count += 1
+        else:
+            result, severity = "KHONG_DU_DU_LIEU", "MEDIUM"
+            gap = "Chưa tìm thấy căn cứ tương ứng với mục rule này trong nội dung phương án."
+            recommendation = "Bổ sung hoặc dẫn chiếu nội dung đáp ứng mục rule import trong thuyết minh/phụ lục phương án."
+            missing_count += 1
+
+        source_label = _rule_source_label(rule)
+        evidence_terms = ", ".join(matched_terms[:8]) if matched_terms else "không tìm thấy từ khóa chính"
+        out.append(_make_check(
+            RULE_IMPORT_GROUP,
+            _rule_display_name(rule),
+            result,
+            severity,
+            f"{fname}: rule {idx}/{len(rule_requirements)} từ {source_label}; từ khóa khớp: {evidence_terms}",
+            gap,
+            recommendation,
+            fname,
+            "",
+            abnormal_type="Đối chiếu rule import",
+            rule_source=f"Rule import: {source_label}",
+        ))
+
+    total = dat_count + partial_count + missing_count
+    if total == 0:
+        return [_make_check(
+            RULE_IMPORT_GROUP,
+            "Kết luận đối chiếu toàn bộ rule import",
+            "KHONG_DU_DU_LIEU",
+            "MEDIUM",
+            f"{fname}: đã đọc {len(rule_requirements)} dòng rule nhưng không trích xuất được mục rule có đủ từ khóa",
+            "File rule chưa có nội dung đủ rõ để đối chiếu tự động.",
+            "Chuẩn hóa file rule: mỗi dòng nên có nội dung yêu cầu, tiêu chí đánh giá và bằng chứng cần kiểm tra.",
+            fname,
+            "",
+            abnormal_type="Không trích xuất được rule",
+            rule_source="Rule import",
+        )]
+
+    if missing_count >= max(3, int(total * 0.35)):
+        result, severity = "KHONG_DAT", "HIGH"
+        gap = "Phương án chưa thể hiện nhiều mục bắt buộc theo file rule import."
+    elif missing_count or partial_count:
+        result, severity = "CAN_BO_SUNG", "MEDIUM"
+        gap = "Phương án cần bổ sung một số căn cứ theo file rule import."
+    else:
+        result, severity = "DAT", "LOW"
+        gap = ""
+
+    out.insert(0, _make_check(
+        RULE_IMPORT_GROUP,
+        "Kết luận đối chiếu toàn bộ rule import",
+        result,
+        severity,
+        f"{fname}: đã quét {total} mục rule import; đạt {dat_count}, cần bổ sung {partial_count}, chưa có căn cứ {missing_count}, bỏ qua {skipped_count}",
+        gap,
+        "Bổ sung các mục chưa có căn cứ/cần bổ sung trong phương án, sau đó chạy thẩm định lại." if gap else "Các mục rule import đều có căn cứ liên quan trong phương án.",
+        fname,
+        "",
+        abnormal_type="Tổng hợp đối chiếu rule import",
+        rule_source="Rule import",
+    ))
+    return out
+
 def _excel_col_name(n: int) -> str:
     # n is 1-based
     out = ""
@@ -168,13 +313,14 @@ def _iter_excel(path: str):
             continue
         yield sheet, df.fillna("")
 
-def analyze_structured_files(paths: list[str]) -> dict:
+def analyze_structured_files(paths: list[str], rule_paths: list[str] | None = None) -> dict:
     checks: list[CheckItem] = []
+    rule_requirements = extract_rule_requirements(rule_paths or []) if rule_paths else []
     for path in paths:
         p = Path(path)
         suffix = p.suffix.lower()
         if suffix in PLAN_SUFFIXES:
-            checks.extend(_check_plan_document(str(p)))
+            checks.extend(_check_plan_document(str(p), rule_requirements))
             continue
         if suffix not in [".xlsx", ".xls", ".csv"]:
             continue
@@ -194,18 +340,21 @@ def analyze_structured_files(paths: list[str]) -> dict:
         "checks": [asdict(c) for c in checks]
     }
 
-def _check_plan_document(path: str) -> list[CheckItem]:
+def _check_plan_document(path: str, rule_requirements: list[dict] | None = None) -> list[CheckItem]:
     p = Path(path)
+    out: list[CheckItem] = []
     try:
-        text = file_to_markdown(path, fast=True)
+        text = file_to_markdown(path, max_chars=MAX_PLAN_TEXT_CHARS, fast=False)
     except Exception as exc:
-        return [_make_check("Tính khả thi phương án", "Đọc nội dung phương án", "KHONG_DU_DU_LIEU", "HIGH", f"{p.name}: {exc}", "Không đọc được nội dung file phương án", "Kiểm tra định dạng file hoặc chuyển sang DOCX/PDF có text layer", p.name, "", abnormal_type="Không đọc được file", rule_source="Rule engine phương án")]
+        out.append(_make_check("Tính khả thi phương án", "Đọc nội dung phương án", "KHONG_DU_DU_LIEU", "HIGH", f"{p.name}: {exc}", "Không đọc được nội dung file phương án", "Kiểm tra định dạng file hoặc chuyển sang DOCX/PDF có text layer", p.name, "", abnormal_type="Không đọc được file", rule_source="Rule engine phương án"))
+        text = ""
 
     folded = _fold_text(text)
     if len(folded.strip()) < 200:
-        return [_make_check("Tính khả thi phương án", "Nội dung phương án đủ để thẩm định", "KHONG_DU_DU_LIEU", "HIGH", f"{p.name}: nội dung đọc được quá ngắn ({len(folded)} ký tự)", "Không đủ dữ liệu để đánh giá tính khả thi", "Upload đầy đủ file thuyết minh/phụ lục hoặc PDF có text layer", p.name, "", abnormal_type="Thiếu nội dung", rule_source="Rule engine phương án")]
+        out.append(_make_check("Tính khả thi phương án", "Nội dung phương án đủ để thẩm định", "KHONG_DU_DU_LIEU", "HIGH", f"{p.name}: nội dung đọc được quá ngắn ({len(folded)} ký tự)", "Không đủ dữ liệu để đánh giá tính khả thi", "Upload đầy đủ file thuyết minh/phụ lục hoặc PDF có text layer", p.name, "", abnormal_type="Thiếu nội dung", rule_source="Rule engine phương án"))
+        out.extend(_check_imported_rules_against_plan(p.name, text, rule_requirements or []))
+        return out
 
-    out: list[CheckItem] = []
     missing_names: list[str] = []
     found_count = 0
     for rule in FEASIBILITY_RULES:
@@ -268,6 +417,7 @@ def _check_plan_document(path: str) -> list[CheckItem]:
         abnormal_type="Đánh giá khả thi tổng hợp",
         rule_source="Rule engine phương án",
     ))
+    out.extend(_check_imported_rules_against_plan(p.name, text, rule_requirements or []))
     return out
 
 def _row_id(row, cols):
